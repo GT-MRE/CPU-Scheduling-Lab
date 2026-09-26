@@ -156,7 +156,6 @@ if uploaded_file:
             if algo == "Round Robin":
                 tq = st.number_input("Time Quantum (ms)", min_value=1, value=4)
         
-        # Display the description of the chosen algorithm
         st.info(algo_descriptions[algo])
                 
         # Execution
@@ -167,78 +166,139 @@ if uploaded_file:
                 gantt_data = simulate_scheduler(df, algo=algo, tq=tq, high_prio_is_low_int=high_prio)
                 res_df, avg_arrival, avg_comp, avg_tat, throughput, avg_wait = calculate_metrics(df, gantt_data)
                 
-                # --- Average Metrics Table ---
-                st.divider()
-                st.subheader(f"Average Metrics Table: {algo}")
-                
-                metrics_summary_df = pd.DataFrame({
-                    "Metric": ["Average Arrival Time", "Average Completion Time", "Average Turnaround Time", "Average Waiting Time", "Throughput"],
-                    "Value": [f"{avg_arrival:.2f} ms", f"{avg_comp:.2f} ms", f"{avg_tat:.2f} ms", f"{avg_wait:.2f} ms", f"{throughput:.4f} proc/ms"]
-                })
-                # Hide the index column for a cleaner presentation
-                st.table(metrics_summary_df.set_index("Metric"))
-                
-                # --- Detailed Process Table ---
-                st.subheader("Detailed Process Table")
-                st.caption("Scroll through the table below to see the exact times calculated for each individual process.")
-                
-                # Reorder the dataframe columns to read logically from left to right
-                display_cols = ['Process ID', 'Arrival Time', 'Burst Time', 'Priority', 'Completion Time', 'Turnaround Time', 'Waiting Time']
-                st.dataframe(res_df[display_cols], use_container_width=True, hide_index=True)
-                
-                # --- Textbook Style Single-Row Gantt Chart ---
-                st.divider()
-                st.subheader("Interactive Gantt Chart")
-                st.caption("Tip: With 1,500 processes, the chart is highly compressed. Click and drag horizontally to zoom into specific blocks. Double-click to zoom out.")
-                
-                tasks = [d['Task'] for d in gantt_data]
-                starts = [d['Start'] for d in gantt_data]
-                finishes = [d['Finish'] for d in gantt_data]
-                durations = [f - s for f, s in zip(finishes, starts)]
-                
-                colors = ['white' if t != 'IDLE' else '#f0f0f0' for t in tasks]
-                line_colors = ['#1f77b4' if t != 'IDLE' else 'gray' for t in tasks]
-                text_colors = ['#1f77b4' if t != 'IDLE' else 'gray' for t in tasks]
-                
-                hover_text = [f"<b>{t}</b><br>Start: {s} ms<br>Finish: {f} ms" for t, s, f in zip(tasks, starts, finishes)]
+                # Persist in Session State so controls can interact without resetting simulation
+                st.session_state['sim_results'] = {
+                    'gantt_data': gantt_data,
+                    'res_df': res_df,
+                    'avg_arrival': avg_arrival,
+                    'avg_comp': avg_comp,
+                    'avg_tat': avg_tat,
+                    'throughput': throughput,
+                    'avg_wait': avg_wait,
+                    'algo': algo
+                }
 
-                fig = go.Figure()
-                
-                fig.add_trace(go.Bar(
-                    x=durations,
-                    base=starts,
-                    y=['CPU'] * len(tasks), 
-                    orientation='h',
-                    text=tasks,
-                    textposition='inside',
-                    insidetextanchor='middle',
-                    hoverinfo='text',
-                    hovertext=hover_text,
-                    marker=dict(
-                        color=colors,
-                        line=dict(color=line_colors, width=2)
-                    ),
-                    textfont=dict(color=text_colors, size=14)
-                ))
-                
-                fig.update_layout(
-                    height=250, 
-                    plot_bgcolor='white',
-                    paper_bgcolor='white',
-                    margin=dict(t=20, b=20, l=10, r=10),
-                    showlegend=False
-                )
-                
-                fig.update_yaxes(visible=False, showticklabels=False)
-                
-                fig.update_xaxes(
-                    title="Time Units (ms)",
-                    showline=True, 
-                    linewidth=2, 
-                    linecolor='#1f77b4', 
-                    tickcolor='#1f77b4',
-                    tickfont=dict(color='#1f77b4'),
-                    gridcolor='#e0e0e0'
-                )
+        # Render outputs if simulation state exists
+        if 'sim_results' in st.session_state:
+            res = st.session_state['sim_results']
+            gantt_data = res['gantt_data']
+            res_df = res['res_df']
+            
+            # --- Average Metrics Table ---
+            st.divider()
+            st.subheader(f"Average Metrics Table: {res['algo']}")
+            
+            metrics_summary_df = pd.DataFrame({
+                "Metric": ["Average Arrival Time", "Average Completion Time", "Average Turnaround Time", "Average Waiting Time", "Throughput"],
+                "Value": [f"{res['avg_arrival']:.2f} ms", f"{res['avg_comp']:.2f} ms", f"{res['avg_tat']:.2f} ms", f"{res['avg_wait']:.2f} ms", f"{res['throughput']:.4f} proc/ms"]
+            })
+            st.table(metrics_summary_df.set_index("Metric"))
+            
+            # --- Detailed Process Table ---
+            st.subheader("Detailed Process Table")
+            st.caption("Scroll through the table below to see the exact times calculated for each individual process.")
+            
+            display_cols = ['Process ID', 'Arrival Time', 'Burst Time', 'Priority', 'Completion Time', 'Turnaround Time', 'Waiting Time']
+            st.dataframe(res_df[display_cols], use_container_width=True, hide_index=True)
+            
+            # --- Resizable & Interactive Gantt Chart ---
+            st.divider()
+            st.subheader("Interactive Gantt Chart")
+            
+            total_blocks = len(gantt_data)
+            st.caption(f"Total execution blocks generated across the timeline: **{total_blocks}**")
+            
+            # Range Slider setup
+            default_view = min(20, total_blocks)
+            block_range = st.slider(
+                "Adjust Visible Block Window:",
+                min_value=1,
+                max_value=total_blocks,
+                value=(1, default_view),
+                step=1,
+                help="Slide to expand or zoom into a specific range of process execution blocks."
+            )
+            
+            # Slice selected window
+            start_idx = block_range[0] - 1
+            end_idx = block_range[1]
+            sliced_gantt = gantt_data[start_idx:end_idx]
+            num_visible = len(sliced_gantt)
+            
+            # Extract slicing parameters
+            tasks = [d['Task'] for d in sliced_gantt]
+            starts = [d['Start'] for d in sliced_gantt]
+            finishes = [d['Finish'] for d in sliced_gantt]
+            durations = [f - s for f, s in zip(finishes, starts)]
+            
+            boundary_times = sorted(list(set(starts + finishes)))
+            
+            # Auto-scale font size dynamically based on the number of blocks visible
+            # If 1-20 blocks -> 14px font; if 100+ blocks -> shrinks down so labels fit cleanly
+            calculated_font_size = max(9, min(15, int(300 / max(1, num_visible))))
+            
+            colors = ['white' if t != 'IDLE' else '#f0f0f0' for t in tasks]
+            line_colors = ['#1f77b4' if t != 'IDLE' else 'gray' for t in tasks]
+            text_colors = ['#1f77b4' if t != 'IDLE' else 'gray' for t in tasks]
+            
+            hover_text = [f"<b>{t}</b><br>Start: {s} ms<br>Finish: {f} ms<br>Duration: {f-s} ms" 
+                          for t, s, f in zip(tasks, starts, finishes)]
 
-                st.plotly_chart(fig, use_container_width=True)
+            fig = go.Figure()
+            
+            # Plot stacked horizontal bar
+            fig.add_trace(go.Bar(
+                x=durations,
+                base=starts,
+                y=['CPU'] * num_visible, 
+                orientation='h',
+                text=tasks,
+                textposition='inside',
+                insidetextanchor='middle',
+                hoverinfo='text',
+                hovertext=hover_text,
+                marker=dict(
+                    color=colors,
+                    line=dict(color=line_colors, width=2)
+                ),
+                textfont=dict(color=text_colors, size=calculated_font_size)
+            ))
+            
+            # Increase chart height from 250 to 320 for a larger, bolder view
+            fig.update_layout(
+                height=320, 
+                plot_bgcolor='white',
+                paper_bgcolor='white',
+                margin=dict(t=20, b=30, l=15, r=15),
+                showlegend=False
+            )
+            
+            fig.update_yaxes(visible=False, showticklabels=False)
+            
+            # Dynamic tick density logic so time numbers don't overlap when many blocks are selected
+            # If viewing <= 35 blocks, show every boundary time; if > 35, display automatic interval ticks
+            tick_config = dict(
+                title="Time Units (ms)",
+                showline=True, 
+                linewidth=2, 
+                linecolor='#1f77b4', 
+                tickcolor='#1f77b4',
+                tickfont=dict(color='#1f77b4', size=12),
+                ticks="outside",
+                ticklen=8,
+                tickwidth=2,
+                showgrid=True,
+                gridcolor='#f0f0f0',
+                range=[starts[0], finishes[-1]] # Realigns the chart x-bounds strictly to visible slice
+            )
+            
+            if num_visible <= 35:
+                tick_config['tickmode'] = 'array'
+                tick_config['tickvals'] = boundary_times
+            else:
+                tick_config['tickmode'] = 'auto'
+                tick_config['nticks'] = 20
+
+            fig.update_xaxes(**tick_config)
+
+            st.plotly_chart(fig, use_container_width=True)
